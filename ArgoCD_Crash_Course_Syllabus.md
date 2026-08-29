@@ -73,10 +73,10 @@ Every module before Production Infra runs entirely free on a student's own lapto
 
 ### Module 4: Deployment Sources — Helm & Kustomize
 *(These two cover the vast majority of real-world repos — Jsonnet skipped entirely)*
-- Deploying via Finovra's Helm chart (values files, parameter overrides)
 - Deploying with a Kustomize base + overlay (a real patch, not just a rendered label)
+- Deploying via Finovra's Helm chart (values files, parameter overrides)
 - Choosing between plain YAML / Helm / Kustomize for a given team
-- **Lab:** Convert the Module 3 deployment to Helm (demo both override mechanisms), then to a Kustomize overlay — same live Application, three source types, each reverted cleanly
+- **Lab:** Convert the Module 3 deployment to a Kustomize overlay, then to Helm (demo both override mechanisms) — same live Application, three source types, landing on Helm as the ongoing baseline
 
 ---
 
