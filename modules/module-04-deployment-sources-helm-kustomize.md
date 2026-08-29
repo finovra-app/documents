@@ -17,6 +17,20 @@ By the end of this module, you should be able to:
 
 ---
 
+## Checkpoint Tags on the `gitops` Repo
+
+Separate from Finovra's own app-version tags (`v1.0.0`, `v1.0.1`, `v2.0.0` — dashboard Docker image releases used in Module 3/5 and the CI reference lab), the `gitops` repo is also tagged at a few points in this module to mark how the *deployment mechanism* evolved:
+
+| Tag | Marks |
+|---|---|
+| `v3.0` | End of Module 3 — plain YAML, all 5 services live, no Helm/Kustomize yet |
+| `v4.1` | This module, once the Helm chart lands (Steps 1–5 below) |
+| `v4.2` | This module, once the Kustomize overlay lands (Step 6) |
+
+These are `git tag`s on `gitops` itself, not Docker image tags — a `v4.1` checkpoint and a dashboard app release are unrelated numbering schemes that happen to share the `v` prefix. To see exactly what the repo looked like before Helm was introduced: `git checkout v3.0`.
+
+---
+
 ## 1. Three Ways to Describe "What Should Be Running"
 
 Every Application you've built so far points at a folder of pre-rendered, plain Kubernetes YAML. That's the simplest possible source type, but it's also the least flexible — no templating, no per-environment overrides, nothing except literal YAML. Helm and Kustomize both solve that, in different philosophies:
