@@ -17,11 +17,11 @@ By the end of this module, you should be able to:
 
 ## 1. The Problem: One YAML Per App Stops Scaling
 
-Count what you're maintaining by hand right now: `apps/finovra.yaml`, `apps/finovra-staging.yaml`, `apps/finovra-prod.yaml`, plus `apps/root.yaml` to tie them together — four files, for **one app across three environments**. That was already a little repetitive; `finovra-staging.yaml` and `finovra-prod.yaml` differ from each other in exactly two fields (`path`, `destination.namespace`) and are otherwise identical copy-paste. `finovra.yaml` differs a bit more (it's Helm-based, the others are Kustomize-based), but the same shape — one hand-maintained file per environment — is still the thing doing the least amount of actual work.
+Count what you're maintaining by hand right now: `apps/finovra.yaml`, `apps/finovra-staging.yaml`, `apps/finovra-prod.yaml`, plus `apps/root.yaml` to tie them together — four files, for **one app across three environments**. That's already a lot of repetition: all three environment `Application`s share the exact same `source.path` (`helm-chart`) and the exact same shape, differing only in which values file each one layers on top and which namespace it targets. One hand-maintained file per environment is still the thing doing the least amount of actual work here.
 
 Now imagine Finovra had ten environments instead of three — dev, staging, prod, plus a handful of short-lived preview environments. That's ten near-identical YAML files, each one a chance to typo a namespace, forget `CreateNamespace=true`, or drift out of sync with the pattern everyone else is copying from.
 
-**`ApplicationSet`** solves this by splitting the problem in two: a **generator** produces a list of "here's what varies" (an environment name, a path, a namespace), and a **template** describes "here's the `Application` shape, with placeholders for whatever the generator gives me." One `ApplicationSet` object, applied once, produces and keeps in sync as many `Application` objects as the generator finds.
+**`ApplicationSet`** solves this by splitting the problem in two: a **generator** produces a list of "here's what varies" (an environment name, a values file, a namespace), and a **template** describes "here's the `Application` shape, with placeholders for whatever the generator gives me." One `ApplicationSet` object, applied once, produces and keeps in sync as many `Application` objects as the generator finds.
 
 ```mermaid
 flowchart LR
@@ -64,14 +64,14 @@ spec:
     - list:
         elements:
           - env: dev
-            path: helm-chart
             namespace: finovra
+            valuesFile: values-dev.yaml
           - env: staging
-            path: kustomize/overlays/staging
             namespace: finovra-staging
+            valuesFile: values-staging.yaml
           - env: prod
-            path: kustomize/overlays/prod
             namespace: finovra-prod
+            valuesFile: values-prod.yaml
   template:
     metadata:
       name: 'finovra-{{env}}'
@@ -80,7 +80,10 @@ spec:
       source:
         repoURL: https://github.com/finovra-app/gitops.git
         targetRevision: main
-        path: '{{path}}'
+        path: helm-chart
+        helm:
+          valueFiles:
+            - '{{valuesFile}}'
       destination:
         server: https://kubernetes.default.svc
         namespace: '{{namespace}}'
@@ -92,30 +95,15 @@ spec:
           - CreateNamespace=true
 ```
 
-Three `elements`, one `template` — the rendered result is functionally identical to three hand-written `Application`s, one per environment, just generated instead of copy-pasted, all sharing one `syncPolicy` (`automated: { prune: true, selfHeal: true }`), so a push to `main` rolls out to dev, staging, and prod the same way.
+Three `elements`, one `template` — the rendered result is functionally identical to three hand-written `Application`s, one per environment, just generated instead of copy-pasted, all sharing one `syncPolicy` (`automated: { prune: true, selfHeal: true }`), so a push to `main` rolls out to dev, staging, and prod the same way. Notice every element has the exact same shape — `env`, `namespace`, `valuesFile` — nothing environment-specific about the structure itself, only the values.
 
 ---
 
-## 3. A Note on Dev's Helm Values
+## 3. Why the Template Stays Uniform Across All Three
 
-Today's `apps/finovra.yaml` deploys the Helm chart with `helm.valueFiles: [values-dev.yaml]`. Check what that file actually overrides:
+This is worth calling out because it wasn't always this clean. Before Module 7 moved staging and prod onto Helm, dev pointed at `path: helm-chart` while staging/prod pointed at Kustomize overlay paths — two genuinely different `source` shapes, which a plain List generator's scalar `{{ }}` placeholders can't express in one template (you'd have needed a conditional, or two separate generators). Now that every environment renders from the same chart, `source.path` is a fixed constant (`helm-chart`) and only `helm.valueFiles` varies — exactly the kind of single-scalar difference the List generator handles cleanly.
 
-```yaml
-# helm-chart/values-dev.yaml
-dashboard:
-  replicas: 3
-```
-
-```yaml
-# helm-chart/values.yaml (defaults)
-dashboard:
-  replicas: 3
-  ...
-```
-
-It's a no-op — `values-dev.yaml` sets `dashboard.replicas` to the exact value the chart's default already has. That's why the template above deploys `helm-chart` with **no `helm.valueFiles` block at all**: dropping it changes nothing about what gets deployed today, and it's what keeps the template uniform across all three environments (same shape, just `path` and `namespace` differ per element).
-
-**If you later give `values-dev.yaml` a real override** (something that actually differs from `values.yaml`), this uniform template can no longer express it — a plain List generator's `{{ }}` placeholders only fill in scalar values, they can't switch a whole `helm:` block on for one element and off for the others. You'd need either a dedicated single-element `ApplicationSet` for dev, or `spec.goTemplate: true` with a conditional block. Worth knowing now, not surprising later.
+**Worth knowing for later, even though it doesn't bite here:** a List generator's placeholders only fill in scalar values — they can't switch a whole block on for one element and off for another. If some future environment needed to skip `helm.valueFiles` entirely (deploy the chart with zero overrides), or needed a second values file layered on top, the uniform template above couldn't express that difference on its own. You'd reach for either a dedicated single-element `ApplicationSet` for that one environment, or `spec.goTemplate: true` with a conditional block. Not a problem today — every environment here has exactly one values file — just the shape of the limitation to recognize if it shows up later.
 
 ---
 
@@ -132,9 +120,9 @@ One thing worth flagging: dev's `Application` is renamed from `finovra` to `fino
 
 ## 5. Trade-off Worth Knowing: No Manual Gate on Prod
 
-With `syncPolicy.automated` shared across all three elements, a push to `main` that touches `kustomize/overlays/prod/` rolls out to prod the same way it rolls out to dev and staging — automatically, no approval step in ArgoCD itself.
+With `syncPolicy.automated` shared across all three elements, a push to `main` that touches `helm-chart/values-prod.yaml` rolls out to prod the same way it rolls out to dev and staging — automatically, no approval step in ArgoCD itself.
 
-If you want a human checkpoint before prod changes, it now has to live **before** the push — e.g. a required PR review/approval on `kustomize/overlays/prod/` in the `gitops` repo, or a promotion step gated by a separate approval process, rather than inside the `ApplicationSet` itself. ArgoCD is still the thing making prod match git; the question of *when* git is allowed to change is entirely a Git-hosting concern (branch protection, CODEOWNERS, required reviewers), not an ArgoCD one.
+If you want a human checkpoint before prod changes, it now has to live **before** the push — e.g. a required PR review/approval on `helm-chart/values-prod.yaml` in the `gitops` repo, or a promotion step gated by a separate approval process, rather than inside the `ApplicationSet` itself. ArgoCD is still the thing making prod match git; the question of *when* git is allowed to change is entirely a Git-hosting concern (branch protection, CODEOWNERS, required reviewers), not an ArgoCD one.
 
 ---
 
@@ -155,14 +143,14 @@ spec:
     - list:
         elements:
           - env: dev
-            path: helm-chart
             namespace: finovra
+            valuesFile: values-dev.yaml
           - env: staging
-            path: kustomize/overlays/staging
             namespace: finovra-staging
+            valuesFile: values-staging.yaml
           - env: prod
-            path: kustomize/overlays/prod
             namespace: finovra-prod
+            valuesFile: values-prod.yaml
   template:
     metadata:
       name: 'finovra-{{env}}'
@@ -171,7 +159,10 @@ spec:
       source:
         repoURL: https://github.com/finovra-app/gitops.git
         targetRevision: main
-        path: '{{path}}'
+        path: helm-chart
+        helm:
+          valueFiles:
+            - '{{valuesFile}}'
       destination:
         server: https://kubernetes.default.svc
         namespace: '{{namespace}}'
@@ -197,7 +188,7 @@ git rm apps/finovra.yaml apps/finovra-staging.yaml apps/finovra-prod.yaml
 argocd appset generate apps/finovra-environments.yaml
 ```
 
-Confirm it renders exactly three `Application`s — `finovra-dev` (namespace `finovra`, source `helm-chart`), `finovra-staging` (namespace `finovra-staging`, source `kustomize/overlays/staging`), and `finovra-prod` (namespace `finovra-prod`, source `kustomize/overlays/prod`) — each with the same `syncPolicy.automated` block.
+Confirm it renders exactly three `Application`s, all sourcing `helm-chart` — `finovra-dev` (namespace `finovra`, `values-dev.yaml`), `finovra-staging` (namespace `finovra-staging`, `values-staging.yaml`), and `finovra-prod` (namespace `finovra-prod`, `values-prod.yaml`) — each with the same `syncPolicy.automated` block.
 
 ### Step 4 — Commit and push
 
@@ -226,13 +217,13 @@ Confirm pods keep running throughout — this is the adoption behavior from Sect
 
 ### Step 6 — Prove it reacts the same way in every environment
 
-Make a trivial change under `kustomize/overlays/prod/` (e.g. bump a replica count or image tag comment), push it, and watch:
+Make a trivial change to `helm-chart/values-prod.yaml` (e.g. bump a replica count or add a comment), push it, and watch:
 
 ```bash
 argocd app get finovra-prod
 ```
 
-It should self-heal to `Synced` on its own, the same way `finovra-staging` would for an equivalent change under `kustomize/overlays/staging/` — no manual sync needed for either.
+It should self-heal to `Synced` on its own, the same way `finovra-staging` would for an equivalent change to `values-staging.yaml` — no manual sync needed for either.
 
 ---
 
@@ -254,7 +245,7 @@ It should self-heal to `Synced` on its own, the same way `finovra-staging` would
 
 1. What specifically would you edit to change all three environments' `repoURL` at once?
 2. What specifically in an `Application`'s YAML determines whether deleting it also deletes the resources it deployed — and do any of this repo's `Application`s have it?
-3. `values-dev.yaml` was dropped from the template entirely. Why was that safe to do today, and what would make it unsafe in the future?
+3. Before Module 7, dev's `source.path` (`helm-chart`) and staging/prod's (Kustomize overlays) were structurally different. Why does today's single template work cleanly where that mix wouldn't have?
 4. Since ArgoCD no longer gates prod changes with a manual sync, where does Section 5 say the approval checkpoint should live instead?
 5. If a fourth environment (say, `qa`) needed the exact same treatment as `dev`/`staging`/`prod`, what's the smallest change that would deploy it?
 

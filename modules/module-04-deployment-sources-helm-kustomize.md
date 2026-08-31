@@ -101,7 +101,7 @@ images:
     newTag: "1.0.0"
 ```
 
-`replicas:` and `images:` are two of a handful of fields Kustomize special-cases with a dedicated, one-line transformer (`images:` is also what Module 7 uses for promoting a dashboard version between environments — there, `newTag` actually changes; here it's the same tag the base already has, just to show the shape). For anything **without** a dedicated transformer — a container port, an env var, a resource limit, any arbitrary field — you'd reach for `patches:` instead: a more verbose but fully general mechanism, expressed as JSON6902 operations (`op`/`path`/`value`), that can target any field on any resource. This overlay doesn't need it — `replicas:` and `images:` cover everything `dev` actually changes — but it's worth knowing `patches:` exists for the day a dedicated transformer doesn't cover what you need.
+`replicas:` and `images:` are two of a handful of fields Kustomize special-cases with a dedicated, one-line transformer (`images:` is also what a Kustomize-based promotion overlay would use to bump a dashboard version between environments — there, `newTag` actually changes; here it's the same tag the base already has, just to show the shape). For anything **without** a dedicated transformer — a container port, an env var, a resource limit, any arbitrary field — you'd reach for `patches:` instead: a more verbose but fully general mechanism, expressed as JSON6902 operations (`op`/`path`/`value`), that can target any field on any resource. This overlay doesn't need it — `replicas:` and `images:` cover everything `dev` actually changes — but it's worth knowing `patches:` exists for the day a dedicated transformer doesn't cover what you need.
 
 **This is when Kustomize actually earns its keep:** imagine `staging` needs `dashboard` at 2 replicas but every backend stays at 1, while `prod` needs different resource limits across the board. With plain YAML you'd maintain three full copies of every manifest. With Kustomize, you maintain **one base** and a handful of small overlay folders, each containing only the fields that differ for that environment — everything else is inherited untouched. That's the whole pitch: no duplication, no templating language, just "here's the base, here's what's different here."
 
@@ -193,7 +193,7 @@ spec:
 | Learning curve | Lowest | Steepest — Go template syntax | Low — just YAML |
 | Real-world share | Common for small internal apps | Dominant for anything published/shared (most public Helm charts) | Very common for internal environment overlays (dev/staging/prod) |
 
-There's no universally "correct" choice — plenty of real teams run all three for different apps in the same cluster. A rule of thumb: if you're **publishing** a chart for others to consume with varying needs, reach for Helm. If you're **layering your own environment differences** on top of one shared base, Kustomize tends to stay simpler longer. Module 7's promotion lab uses Kustomize overlays for exactly that reason.
+There's no universally "correct" choice — plenty of real teams run all three for different apps in the same cluster. A rule of thumb: if you're **publishing** a chart for others to consume with varying needs, reach for Helm. If you're **layering your own environment differences** on top of one shared base, Kustomize tends to stay simpler longer. Module 7's promotion lab uses Helm values files instead, since dev's already on Helm by then — but a team that hadn't already committed to one tool would reach for Kustomize in exactly that situation.
 
 ---
 
@@ -387,7 +387,7 @@ You should see `arsr319/finovra-dashboard:1.0.1` — the practice-broken build f
 
 **Revert:** delete the `helm:` block from `finovra.yaml`, reapply. Confirm you're back to `1.0.0` and `Health Status: Healthy`. This is where you stay — no further path changes needed.
 
-**Why Helm, not Kustomize, is where we land:** this is deliberate, not an oversight. Real teams that adopt Helm don't bounce back to a lighter-weight tool afterward — you pick a packaging approach and the rest of your releases build on it. From here through the rest of the course, **Helm is Finovra's ongoing baseline.** Kustomize was worth seeing work for real — you now know exactly what it's for and when you'd reach for it (Module 7's promotion overlays, for one) — but the app itself moves forward on the chart.
+**Why Helm, not Kustomize, is where we land:** this is deliberate, not an oversight. Real teams that adopt Helm don't bounce back to a lighter-weight tool afterward — you pick a packaging approach and the rest of your releases build on it. From here through the rest of the course, **Helm is Finovra's ongoing baseline.** Kustomize was worth seeing work for real — you now know exactly what it's for and when you'd reach for it, environment-promotion overlays being the classic case — but the app itself moves forward on the chart.
 
 **Checkpoint:** you converted the same live Application through all three source types this module — plain YAML → Kustomize overlay → Helm — with the app staying `Synced`/`Healthy` throughout, and you've landed on Helm as where Finovra stays for the rest of the course.
 

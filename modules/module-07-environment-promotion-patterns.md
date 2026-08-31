@@ -8,8 +8,8 @@
 ## Learning Objectives
 
 By the end of this module, you should be able to:
-- Explain why most real teams organize multiple environments with directories/overlays on one branch, not one long-lived branch per environment
-- Build `staging` and `prod` Kustomize overlays on top of Finovra's existing base, each with its own environment-specific overrides
+- Explain why most real teams organize multiple environments with files on one branch, not one long-lived branch per environment
+- Build `staging` and `prod` Helm values files on top of Finovra's existing chart, each with its own environment-specific overrides
 - Set up a PR-based promotion flow, and explain the difference between the two separate gates a change passes through before it's live in prod
 - Use the App-of-Apps pattern to manage multiple `Application` objects from one root, instead of `kubectl apply`-ing each by hand
 - Use `sync-wave` annotations to control the order resources apply within one sync
@@ -17,46 +17,54 @@ By the end of this module, you should be able to:
 
 ---
 
-## 1. Branch-per-Environment vs. Overlay-per-Environment
+## 1. Branch-per-Environment vs. File-per-Environment
 
 There are two common ways teams structure "one app, three environments" in a GitOps repo, and the choice shapes everything else in this module.
 
 **Branch-per-environment:** a long-lived `dev`, `staging`, and `prod` branch, each with its own copy of the manifests. Promotion = merging `dev` → `staging` → `prod`. This looks appealing at first — it mirrors how some teams already branch application code — but it comes with real problems in practice: three branches drift out of sync with each other over time, merge conflicts show up in manifests instead of in a clean diff, and it's easy to lose track of which branch is actually "ahead." ArgoCD also has to track three separate `targetRevision`s, one per `Application`.
 
-**Overlay-per-environment (directory-per-environment):** one branch (`main`), with each environment as its own folder — `kustomize/overlays/dev`, `kustomize/overlays/staging`, `kustomize/overlays/prod` — all layered on the same shared base. Promotion = a PR that changes one file in one overlay folder. There's only ever one `main` to reason about, and a promotion PR's diff shows you *exactly* what's about to change in that environment — nothing more.
+**File-per-environment:** one branch (`main`), with each environment as its own Helm values file — `values-dev.yaml`, `values-staging.yaml`, `values-prod.yaml` — all layered on the same shared chart. Promotion = a PR that changes one line in one values file. There's only ever one `main` to reason about, and a promotion PR's diff shows you *exactly* what's about to change in that environment — nothing more.
 
-| | Branch-per-environment | Overlay-per-environment |
+| | Branch-per-environment | File-per-environment |
 |---|---|---|
 | Number of long-lived branches | 3+ | 1 (`main`) |
-| Promotion mechanism | Merge one branch into another | PR that edits one overlay folder |
+| Promotion mechanism | Merge one branch into another | PR that edits one values file |
 | Risk of drift | Branches silently diverge over time | Low — everything lives on `main` together |
 | Diff clarity | Merge diff can include unrelated noise | PR diff is exactly the intended change |
 | What most real teams use | Minority, mostly for other reasons (e.g. release branches) | **The default for GitOps config repos** |
 
-This module builds the overlay-per-environment version — it's what Finovra's `kustomize/` layout has been quietly set up for since Module 4, and it's what you'll see in the overwhelming majority of real ArgoCD repos.
+This module builds the file-per-environment version — the same shared-base-plus-overrides idea Kustomize overlays use (Module 4), expressed through Helm's own override mechanism instead, and it keeps every environment on the one tool Finovra's used since Module 4: dev is already Helm, so staging and prod join it rather than introducing a second tool just for this module.
 
 ---
 
-## 2. Promoting dev → staging → prod
+## 2. A Deliberate Step Back: Rollout → Deployment for This Module
 
-Finovra's existing `finovra` Application (Helm-based, namespace `finovra`) has been "dev" all along, without ever needing the label — every module so far has deployed straight to it. This module adds two new environments alongside it: **staging** and **prod**, each its own `Application`, each pointed at its own Kustomize overlay.
+Module 6 converted `dashboard` to an Argo Rollouts canary. This module reverts that — on purpose, not as an undo of Module 6's lesson.
 
-**Dev deliberately stays exactly as it is — Helm-based, running `dashboard` as a canary `Rollout` — rather than getting rebuilt on Kustomize to match.** That does mean dev and staging/prod use different packaging tools, which is worth naming rather than glossing over: most real teams keep one tool per app across all its environments. It's a reasonable exception here specifically because dev is the environment where you've been canarying and deliberately breaking things; staging/prod are where the *promotion pattern* is the lesson, and rebuilding dev on Kustomize would mean either dropping the canary `Rollout` entirely or re-porting it into the Kustomize base — real extra work that teaches nothing new about promotion.
+Promotion is what this module teaches: two Git gates, one manual-sync gate, one shared chart across three environments. Canary is a *different* lesson, already taught in full in Module 6. Building this module's staging/prod environments on top of the `Rollout` would mean every promotion also triggers a canary step (`setWeight: 50`, analysis, the works) in staging and prod — which is realistic, but it teaches two things at once instead of one, and buries the promotion pattern this module is actually about under canary mechanics you've already seen. So: `dashboard` goes back to a plain `Deployment` here, and the canary/stable Services plus the `AnalysisTemplate` from Module 6 get removed, since nothing references them once the `Rollout` is gone. This is Step 1 of the lab, not an aside — do it before anything else in this module.
 
-A promotion is nothing more than **a PR that bumps one value in one overlay** — normally the image tag, once you've proven it's good somewhere earlier in the chain:
+(If you want canary *and* promotion together for real, that's a natural next exercise once this module's pattern is solid — apply Module 6's `Rollout` conversion again, on top of what this module builds, and you'd get exactly that. Not part of this module's required path.)
+
+---
+
+## 3. Promoting dev → staging → prod
+
+Finovra's existing `finovra` Application (Helm-based, namespace `finovra`) has been "dev" all along, without ever needing the label — every module so far has deployed straight to it. This module adds two new environments alongside it: **staging** and **prod**, each its own `Application`, each pointing at the *same* `helm-chart` path dev already uses, differing only in which values file each one layers on top.
+
+A promotion is nothing more than **a PR that bumps one value in one values file** — normally the image tag, once you've proven it's good somewhere earlier in the chain:
 
 ```mermaid
 flowchart LR
     Dev["dev\n(finovra ns)\nautomated sync"]
-    PR1["PR: bump staging\noverlay's image tag"]
+    PR1["PR: bump staging's\nvalues file image tag"]
     Staging["staging\n(finovra-staging ns)\nautomated sync"]
-    PR2["PR: bump prod\noverlay's image tag"]
+    PR2["PR: bump prod's\nvalues file image tag"]
     Prod["prod\n(finovra-prod ns)\nmanual sync only"]
 
     Dev -->|proven good| PR1
     PR1 -->|reviewed + merged| Staging
     Staging -->|proven good| PR2
-    PR2 -->|reviewed + merged| Prod2["Git: prod overlay\nnow says 1.0.2"]
+    PR2 -->|reviewed + merged| Prod2["Git: values-prod.yaml\nnow says 1.0.2"]
     Prod2 -.->|"still requires a\nhuman argocd app sync"| Prod
 ```
 
@@ -69,7 +77,7 @@ That second gate is what the syllabus calls "a manual approval gate before prod,
 
 ---
 
-## 3. App-of-Apps: One Root, Many Applications
+## 4. App-of-Apps: One Root, Many Applications
 
 You've been running one `Application` at a time, applied by hand with `kubectl apply -f apps/finovra.yaml`. That's fine for one environment. It gets tedious fast once you're managing three — and error-prone, since nothing stops someone from forgetting to apply one of them, or applying a stale copy.
 
@@ -103,16 +111,18 @@ This is the plain-YAML directory source type — nothing new there — except wh
 
 ---
 
-## 4. Add-on: Sync Waves & Lifecycle Hooks
+## 5. Add-on: Sync Waves & Lifecycle Hooks
 
 Both of these solve a related problem — **ordering** — but at different scopes. A `sync-wave` controls the order resources within *the same sync* get applied. A hook runs a one-off task tied to a specific *phase* of a sync (before it starts, after it finishes, if it fails). Neither is something most plain-microservices teams reach for often — but Finovra's dashboard genuinely does depend on its four backend services being up first, which makes it a fair example to build once.
 
+Because dev, staging, and prod all render from the same `helm-chart/templates/`, adding these here means every environment gets the same ordering behavior — not just the ones you happen to be building this module.
+
 ### Sync Waves
 
-Every resource ArgoCD manages defaults to `sync-wave: "0"`. Resources in the same wave apply together, in no particular order; ArgoCD waits for one wave to be healthy before starting the next. Annotate the four backend Deployments and Services to stay at wave `"0"` (the default — no annotation needed), and bump `dashboard`'s Deployment and Service to wave `"1"`:
+Every resource ArgoCD manages defaults to `sync-wave: "0"`. Resources in the same wave apply together, in no particular order; ArgoCD waits for one wave to be healthy before starting the next. Leave the four backend Deployments/Services at wave `"0"` (the default — no annotation needed), and bump `dashboard`'s Deployment and Service to wave `"1"`:
 
 ```yaml
-# kustomize/base/dashboard-deployment.yaml (excerpt)
+# helm-chart/templates/dashboard.yaml (excerpt)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -123,14 +133,14 @@ spec:
   # ...unchanged...
 ```
 
-Do the same on `dashboard-service.yaml`. On the next full sync, ArgoCD applies all four backends first, waits until they're `Healthy`, *then* applies `dashboard` — instead of firing all ten resources at once and letting Kubernetes sort out the timing. This mostly matters on a **from-scratch deploy**: without it, `dashboard`'s Pods could start before the backend Services even exist, and its first few requests would just fail until the backends caught up (usually self-correcting within seconds, but visible in logs, and avoidable).
+Do the same on `dashboard`'s `Service` block in the same file. On the next full sync, ArgoCD applies all four backends first, waits until they're `Healthy`, *then* applies `dashboard` — instead of firing all ten resources at once and letting Kubernetes sort out the timing. This mostly matters on a **from-scratch deploy** — exactly what staging and prod's first sync in this module's lab is: without it, `dashboard`'s Pods could start before the backend Services even exist, and its first few requests would just fail until the backends caught up (usually self-correcting within seconds, but visible in logs, and avoidable).
 
 ### Lifecycle Hooks
 
-A hook is a Kubernetes `Job` (usually) that ArgoCD runs at a specific point in the sync lifecycle, identified purely by an annotation — `PreSync`, `Sync`, `PostSync`, or `SyncFail`. Here's a `PreSync` hook that checks every backend's `/healthz` before letting the rest of the sync proceed:
+A hook is a Kubernetes `Job` (usually) that ArgoCD runs at a specific point in the sync lifecycle, identified purely by an annotation — `PreSync`, `Sync`, `PostSync`, or `SyncFail`. Here's a `PreSync` hook that checks every backend's `/healthz` before letting the rest of the sync proceed, as a new chart file:
 
 ```yaml
-# kustomize/base/backend-healthcheck-hook.yaml
+# helm-chart/templates/backend-healthcheck-hook.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -156,7 +166,7 @@ spec:
 
 `hook-delete-policy: BeforeHookCreation` means ArgoCD deletes any previous run of this Job right before creating a new one — without it, the second sync would fail immediately with "Job already exists."
 
-**The catch, worth knowing before you reach for this pattern elsewhere:** a `PreSync` hook runs *before any of the sync's own resources are applied*. On a genuinely first-ever deploy to an empty namespace, this hook would fail every time — the backend Services it's curling don't exist yet. It only makes sense on an environment that's already running, where you're validating the existing backends stay healthy before rolling out a *new* dashboard release on top of them — which is exactly staging and prod's situation, never a fresh `dev` bootstrap. (The other common use — `PostSync` hooks for a smoke test *after* everything's up, or a one-off DB migration — doesn't have this problem, since by definition everything the hook needs already exists. This module builds only the `PreSync` example; `PostSync` follows the identical pattern with `argocd.argoproj.io/hook: PostSync` instead.)
+**The catch, worth knowing before you reach for this pattern elsewhere:** a `PreSync` hook runs *before any of the sync's own resources are applied*. On a genuinely first-ever deploy to an empty namespace, this hook fails every time — the backend Services it's curling don't exist yet. That's exactly staging and prod's situation on their very first sync in this module's lab. Add this hook once you're past that first sync, not before it — it's a better fit once an environment's already running, validating existing backends stay healthy before rolling out a *new* dashboard release on top of them. Since this template is now shared with `dev` too, it also runs there on every future sync — harmless for `dev` specifically, since its backends have been up continuously since Module 3, so the check just passes immediately each time. (The other common use — `PostSync` hooks for a smoke test *after* everything's up, or a one-off DB migration — doesn't have the first-sync problem, since by definition everything the hook needs already exists. This module builds only the `PreSync` example; `PostSync` follows the identical pattern with `argocd.argoproj.io/hook: PostSync` instead.)
 
 ---
 
@@ -164,80 +174,72 @@ spec:
 
 All of this happens in your fork of `gitops`.
 
-### Step 1 — Add the staging overlay
+### Step 1 — Revert dashboard from a Rollout back to a Deployment
 
-Create `kustomize/overlays/staging/kustomization.yaml`:
+Per Section 2: this module builds on a plain `Deployment`, deliberately, so promotion stays the only new concept this module introduces. In `helm-chart/templates/dashboard.yaml`, swap `apiVersion: argoproj.io/v1alpha1` / `kind: Rollout` back to `apiVersion: apps/v1` / `kind: Deployment`, and remove the `strategy.canary` block — everything else (image line, ports, env, probes, resources) stays exactly as it is. Delete `helm-chart/templates/dashboard-canary.yaml` entirely — the canary/stable Services and `AnalysisTemplate` it defines have nothing to attach to once the `Rollout` is gone.
 
-```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - ../../base
-
-replicas:
-  - name: dashboard
-    count: 2
-
-images:
-  - name: arsr319/finovra-dashboard
-    newTag: "1.0.2"
-```
-
-Same two dedicated transformers (`replicas:`, `images:`) — no separate patch file needed here either. The `images:` line is the piece that makes this a *promotion* overlay rather than just another environment copy — it's the one line a promotion PR will actually touch going forward. Render it locally before moving on:
+Sanity-check and ship it on its own, before adding anything else:
 
 ```bash
-kubectl kustomize kustomize/overlays/staging
+helm lint helm-chart
+helm template finovra helm-chart | grep -A2 "kind: Deployment"
+git add helm-chart/templates/dashboard.yaml
+git rm helm-chart/templates/dashboard-canary.yaml
+git commit -m "Step back to a plain Deployment for the promotion module"
+git push origin main
 ```
 
-Confirm `dashboard`'s image reads `arsr319/finovra-dashboard:1.0.2` and its `replicas: 2`, while all four backends stay at whatever the base declares.
+Confirm `argocd app get finovra` settles back to `Synced`/`Healthy` on a plain `Deployment` before moving on.
 
-### Step 2 — Add the prod overlay
+### Step 2 — Add the staging values file
 
-Create `kustomize/overlays/prod/kustomization.yaml`:
+Create `helm-chart/values-staging.yaml`:
 
 ```yaml
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-
-resources:
-  - ../../base
-
-replicas:
-  - name: dashboard
-    count: 3
-
-images:
-  - name: arsr319/finovra-dashboard
-    newTag: "1.0.0"
+dashboard:
+  replicas: 2
+  image:
+    tag: "1.0.2"
 ```
 
-Note prod deliberately starts pinned to `1.0.0`, one step behind staging's `1.0.2` — that gap is what you'll close with a real promotion PR in Step 5. Render and sanity-check the same way as Step 1.
+The `image.tag` line is the piece that makes this a *promotion* file rather than just another environment copy — it's the one line a promotion PR will actually touch going forward. Render it locally before moving on:
 
-> **If Finovra used Helm for this instead:** you wouldn't need overlay directories at all — just a `values-staging.yaml` and `values-prod.yaml` sitting next to the existing `values-dev.yaml`, each overriding `dashboard.image.tag`:
+```bash
+helm template finovra helm-chart -f helm-chart/values-staging.yaml | grep -A2 "kind: Deployment"
+```
+
+Confirm `dashboard`'s image reads `arsr319/finovra-dashboard:1.0.2` and its `replicas: 2`, while all four backends stay at whatever `values.yaml`'s defaults declare.
+
+### Step 3 — Add the prod values file
+
+Create `helm-chart/values-prod.yaml`:
+
+```yaml
+dashboard:
+  replicas: 3
+  image:
+    tag: "1.0.0"
+```
+
+Note prod deliberately starts pinned to `1.0.0`, one step behind staging's `1.0.2` — that gap is what you'll close with a real promotion PR in Step 6. Render and sanity-check the same way as Step 2.
+
+> **If Finovra used Kustomize for this instead:** you'd build `kustomize/overlays/staging` and `kustomize/overlays/prod`, each a base reference plus `replicas:`/`images:` transformers:
 >
 > ```yaml
-> # values-staging.yaml
-> dashboard:
->   replicas: 2
->   image:
->     tag: "1.0.2"
+> # kustomize/overlays/staging/kustomization.yaml
+> resources:
+>   - ../../base
+> replicas:
+>   - name: dashboard
+>     count: 2
+> images:
+>   - name: arsr319/finovra-dashboard
+>     newTag: "1.0.2"
 > ```
 >
-> The `Application` would point at the same `helm-chart` path dev already uses, swapping in a values file instead of a Kustomize path:
->
-> ```yaml
-> spec:
->   source:
->     path: helm-chart
->     helm:
->       valueFiles:
->         - values-staging.yaml
-> ```
->
-> A promotion PR would then bump one line inside `values-prod.yaml` instead of `kustomize/overlays/prod/kustomization.yaml`'s `images.newTag` — same promotion mechanic, same two gates from Section 2, just expressed through Helm's override system instead of Kustomize's. This module builds the Kustomize version for real, since that's the tool most teams reach for specifically for environment overlays — but the pattern itself isn't tool-specific, and you'd land in the same place either way.
+> The `Application` would point at the overlay path instead of a values file (`path: kustomize/overlays/staging`), and a promotion PR would bump `kustomize/overlays/prod/kustomization.yaml`'s `images.newTag` instead of `values-prod.yaml`'s `dashboard.image.tag` — same promotion mechanic, same two gates from Section 3, just expressed through Kustomize's transformers instead of Helm's override system. This module builds the Helm version for real, since dev is already Helm — but the pattern itself isn't tool-specific, and you'd land in the same place either way. Module 4 covers Kustomize in full if you want to see this side built out for real.
 
-### Step 3 — Add the two new Applications
+### Step 4 — Add the two new Applications
 
 Create `apps/finovra-staging.yaml`:
 
@@ -252,7 +254,10 @@ spec:
   source:
     repoURL: https://github.com/<your-username>/gitops.git
     targetRevision: main
-    path: kustomize/overlays/staging
+    path: helm-chart
+    helm:
+      valueFiles:
+        - values-staging.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: finovra-staging
@@ -277,7 +282,10 @@ spec:
   source:
     repoURL: https://github.com/<your-username>/gitops.git
     targetRevision: main
-    path: kustomize/overlays/prod
+    path: helm-chart
+    helm:
+      valueFiles:
+        - values-prod.yaml
   destination:
     server: https://kubernetes.default.svc
     namespace: finovra-prod
@@ -286,13 +294,13 @@ spec:
       - CreateNamespace=true
 ```
 
-### Step 4 — Wrap them in an App-of-Apps root
+### Step 5 — Wrap them in an App-of-Apps root
 
-Create `apps/root.yaml` (the exact file shown in Section 3). Commit and push everything from Steps 1–4 in one commit:
+Create `apps/root.yaml` (the exact file shown in Section 4). Commit and push everything from Steps 2–5 in one commit:
 
 ```bash
-git add kustomize/overlays/staging kustomize/overlays/prod apps/finovra-staging.yaml apps/finovra-prod.yaml apps/root.yaml
-git commit -m "Add staging/prod overlays and an App-of-Apps root"
+git add helm-chart/values-staging.yaml helm-chart/values-prod.yaml apps/finovra-staging.yaml apps/finovra-prod.yaml apps/root.yaml
+git commit -m "Add staging/prod values files and an App-of-Apps root"
 git push origin main
 ```
 
@@ -316,19 +324,19 @@ argocd app sync finovra-prod
 argocd app get finovra-prod
 ```
 
-That manual command **is** the approval gate from Section 2 — confirm `finovra-prod` settles to `Synced`/`Healthy` running `1.0.0`, one version behind staging's `1.0.2`.
+That manual command **is** the approval gate from Section 3 — confirm `finovra-prod` settles to `Synced`/`Healthy` running `1.0.0`, one version behind staging's `1.0.2`.
 
-### Step 5 — Run a real promotion
+### Step 6 — Run a real promotion
 
-Open a PR (not a direct push to `main`) that changes exactly one line — `kustomize/overlays/prod/kustomization.yaml`'s `images.newTag`, from `"1.0.0"` to `"1.0.2"`:
+Open a PR (not a direct push to `main`) that changes exactly one line — `helm-chart/values-prod.yaml`'s `dashboard.image.tag`, from `"1.0.0"` to `"1.0.2"`:
 
 ```bash
 git checkout -b promote-prod-1.0.2
-# edit kustomize/overlays/prod/kustomization.yaml: newTag: "1.0.2"
-git add kustomize/overlays/prod/kustomization.yaml
+# edit helm-chart/values-prod.yaml: image.tag: "1.0.2"
+git add helm-chart/values-prod.yaml
 git commit -m "Promote prod to 1.0.2"
 git push origin promote-prod-1.0.2
-gh pr create --title "Promote prod to 1.0.2" --body "staging has been on 1.0.2 since Step 1 with no issues."
+gh pr create --title "Promote prod to 1.0.2" --body "staging has been on 1.0.2 since Step 2 with no issues."
 ```
 
 Review and merge it (through GitHub, same as any real PR). Then check ArgoCD:
@@ -345,7 +353,7 @@ argocd app get finovra-prod
 kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — managed three `Application` objects from one root, and (if you added the sync-wave annotations and hook from Section 4) watched backends deploy before the dashboard on every one of these environments' next full sync.
+**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — managed three `Application` objects from one root, and (if you added the sync-wave annotations and hook from Section 5) watched backends deploy before the dashboard on every one of these environments' next full sync.
 
 ---
 
@@ -353,8 +361,8 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 
 | Term | Meaning |
 |---|---|
-| **Overlay-per-environment** | One branch, one folder per environment, all layered on a shared Kustomize base — the pattern most real GitOps repos use over branch-per-environment |
-| **Promotion** | A PR that changes one value (usually an image tag) in one environment's overlay, moving a proven release to the next environment |
+| **File-per-environment** | One branch, one Helm values file per environment, all layered on a shared chart — the pattern most real GitOps repos use over branch-per-environment |
+| **Promotion** | A PR that changes one value (usually an image tag) in one environment's values file, moving a proven release to the next environment |
 | **PR review gate** | Branch protection requiring a reviewed, merged PR before a change lands on `main` — gates what's *allowed into Git* |
 | **Manual-sync gate** | An `Application` with no `automated:` sync policy — gates what's *allowed to actually deploy*, independent of the PR gate |
 | **App-of-Apps** | A root `Application` whose source is a folder of other `Application` manifests, so ArgoCD manages the app list itself instead of you applying each one by hand |
@@ -366,11 +374,12 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 
 ## Recap Questions
 
-1. Why does a promotion PR's diff stay small and easy to review under the overlay-per-environment pattern, but not necessarily under branch-per-environment?
-2. `finovra-staging` and `finovra-prod` are both `Synced` to the same Git commit at some point in Step 5. Why does only one of them actually have `1.0.2` running?
-3. What specifically does the App-of-Apps root manage that a single `Application` doesn't?
-4. Why would the `PreSync` backend-healthcheck hook fail on a brand-new environment's very first sync, and why isn't that a problem for a `PostSync` hook doing the same kind of check?
-5. If `dashboard`'s Deployment didn't have a `sync-wave` annotation at all, what wave would it sync in, and what would that mean for its ordering relative to the four backends?
+1. Why does a promotion PR's diff stay small and easy to review under the file-per-environment pattern, but not necessarily under branch-per-environment?
+2. Why does this module revert `dashboard` from a `Rollout` back to a `Deployment` before building anything else — what would layering promotion on top of the canary have cost pedagogically?
+3. `finovra-staging` and `finovra-prod` are both `Synced` to the same Git commit at some point in Step 6. Why does only one of them actually have `1.0.2` running?
+4. What specifically does the App-of-Apps root manage that a single `Application` doesn't?
+5. Why would the `PreSync` backend-healthcheck hook fail on a brand-new environment's very first sync, and why isn't that a problem for a `PostSync` hook doing the same kind of check?
+6. If `dashboard`'s Deployment didn't have a `sync-wave` annotation at all, what wave would it sync in, and what would that mean for its ordering relative to the four backends?
 
 ---
 
