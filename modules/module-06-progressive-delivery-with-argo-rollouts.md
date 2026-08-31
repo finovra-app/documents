@@ -82,7 +82,13 @@ kubectl argo rollouts version
 kubectl get pods -n argo-rollouts
 ```
 
-ArgoCD itself needs no changes — it already understands the `Rollout` resource's health, the same way it understands a plain `Deployment`.
+ArgoCD itself needs no changes — it already understands the `Rollout` resource's health, the same way it understands a plain `Deployment`. That said, ArgoCD's own UI only shows the Rollout's overall health (`Progressing` → `Healthy`/`Degraded`) in the Application tree — it doesn't render canary-specific detail like step number or traffic weight. For that, start Argo Rollouts' own web dashboard, a visual equivalent of the `kubectl argo rollouts get rollout ... --watch` terminal output used throughout this module's lab:
+
+```bash
+kubectl argo rollouts dashboard -n finovra
+```
+
+Opens at `http://localhost:3100` by default — shows the canary's steps, weight, and Pod counts graphically, live, as the rollout progresses. Worth having open alongside the browser tab showing the dashboard app itself when demoing this module.
 
 ---
 
@@ -180,7 +186,7 @@ flowchart TB
         CanarySvc["Service: dashboard-canary\nselector patched by controller to\nonly the canary ReplicaSet's pods"]
         StableSvc["Service: dashboard-stable\nselector patched by controller to\nonly the stable ReplicaSet's pods"]
 
-        StablePods["Stable Pods\n(1.0.2 — current release)"]
+        StablePods["Stable Pods\n(1.0.0 — current release)"]
         CanaryPods["Canary Pods\n(1.0.3 — new release)"]
 
         DashSvc -- "round-robins across\nALL matching pods" --> StablePods
@@ -286,7 +292,7 @@ Add `helm-chart/templates/dashboard-canary.yaml` — the two Services and the `A
 dashboard:
   replicas: 2
   image:
-    tag: "1.0.2"
+    tag: ""
   resources:
     requests:
       cpu: 50m
@@ -296,6 +302,8 @@ dashboard:
       memory: 128Mi
 ```
 
+`image.tag` stays empty, same as it's been since Module 5's `git revert` — falling back to the global `1.0.0`. Converting to a `Rollout` doesn't need a new version any more than Module 4's Helm conversion did; only `replicas` (bumped to 2, so there's enough Pods for a meaningful 50/50 split) and `resources` (now overridable via values, instead of hardcoded in the template) actually change here.
+
 Sanity-check it locally:
 
 ```bash
@@ -303,7 +311,7 @@ helm lint helm-chart
 helm template finovra helm-chart | grep -A2 "kind: Rollout"
 ```
 
-Confirm it renders one `Rollout` (not `Deployment`) for `dashboard`, with `image: "arsr319/finovra-dashboard:1.0.2"` and no `FAIL_MODE` env entry anywhere. Then ship it:
+Confirm it renders one `Rollout` (not `Deployment`) for `dashboard`, with `image: "arsr319/finovra-dashboard:1.0.0"` and no `FAIL_MODE` env entry anywhere. Then ship it:
 
 ```bash
 git add helm-chart/
@@ -323,7 +331,7 @@ Wait for `Status: ✔ Healthy`, `Step: 2/2`, `SetWeight: 100`. Confirm `argocd a
 
 ### Step 3 — Ship a good change, watch the canary pass
 
-Optional. If you'd rather see one full successful canary cycle before breaking anything, push any harmless change to `helm-chart/values.yaml` (leave `dashboard.image.tag: "1.0.2"` as-is) and watch it sail through `Step: 2/2` on its own. Otherwise, move straight to Step 4.
+Optional. If you'd rather see one full successful canary cycle before breaking anything, push any harmless change to `helm-chart/values.yaml` (leave `dashboard.image.tag: ""` as-is) and watch it sail through `Step: 2/2` on its own. Otherwise, move straight to Step 4.
 
 ### Step 4 — Inject the failure
 
@@ -335,13 +343,15 @@ git commit -m "Ship a bad dashboard release: bump image tag to 1.0.3"
 git push origin main
 ```
 
-Watch it happen. This takes about two minutes end to end, so don't be surprised if nothing looks different for the first 30-40 seconds:
+Watch it happen. This takes about two minutes end to end, so don't be surprised if nothing looks different for the first 30-40 seconds. Terminal view:
 
 ```bash
 kubectl argo rollouts get rollout dashboard -n finovra --watch
 ```
 
-You'll see `SetWeight` jump to `50`, then the analysis step start running. **While that's in progress**, open the dashboard in your browser (or keep it open from an earlier module) and refresh it repeatedly every few seconds. Because `dashboard`'s Service round-robins across both the stable and canary Pods, roughly every other refresh should land on a `1.0.3` Pod — you'll see the `insurance` and `loans` tiles flip to red ("Failed to load") on those hits, and back to normal green on the ones that land on a stable `1.0.2` Pod. That's the same 50/50 split the analysis is independently checking, just made visible.
+Or the GUI equivalent from Section 3 (`kubectl argo rollouts dashboard -n finovra`) — same information, graphically, if you're demoing this to an audience.
+
+You'll see `SetWeight` jump to `50`, then the analysis step start running. **While that's in progress**, open the dashboard in your browser (or keep it open from an earlier module) and refresh it repeatedly every few seconds. Because `dashboard`'s Service round-robins across both the stable and canary Pods, roughly every other refresh should land on a `1.0.3` Pod — you'll see the `insurance` and `loans` tiles flip to red ("Failed to load") on those hits, and back to normal green on the ones that land on a stable `1.0.0` Pod. That's the same 50/50 split the analysis is independently checking, just made visible.
 
 After enough failed checks (`8` in a row, at `15s` apart — about two minutes), the rollout status flips to `✖ Degraded` with a message like:
 
@@ -359,7 +369,7 @@ curl -s http://localhost:8082/api/tiles   # if you still have the port-forward f
 
 Two things to notice:
 - **`Sync Status` stays `Synced`.** Git and the live Rollout object agree — `1.0.3` really is the image that's declared and rendered. Only `Health Status` flags the problem, because the *analysis* failed, not because anything drifted from Git.
-- **The stable Pods — still running `1.0.2` — never stopped serving traffic.**
+- **The stable Pods — still running `1.0.0` — never stopped serving traffic.**
 
 ### Step 5 — Fix it and confirm recovery
 
