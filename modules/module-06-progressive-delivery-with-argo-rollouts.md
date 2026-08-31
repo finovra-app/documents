@@ -157,7 +157,7 @@ Opens at `http://localhost:3100` by default — shows the canary's steps, weight
 - Swap `apiVersion` and `kind`
 - Add a `strategy` block
 
-The parts that are already templated — image tag, resources — stay exactly the same:
+Everything in `spec.template` carries over unchanged — the templated image tag, the hardcoded `resources` block, all of it:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -301,26 +301,31 @@ spec:
         - name: dashboard
           image: "{{ .Values.image.repository }}/finovra-dashboard:{{ .Values.dashboard.image.tag | default .Values.image.tag }}"
           ports:
-            - containerPort: 3000
+            - containerPort: {{ .Values.dashboard.service.port }}
           env:
             - name: PORT
-              value: "3000"
+              value: "{{ .Values.dashboard.service.port }}"
             - name: VERSION
               value: "{{ .Values.dashboard.image.tag | default .Values.image.tag }}"
             - name: SERVICES
-              value: "accounts:http://accounts-service:8000,insurance:http://insurance-service:8000,investments:http://investments-service:8000,loans:http://loans-service:8000"
+              value: "accounts:http://accounts-service:{{ (index .Values "accounts-service").service.port }},insurance:http://insurance-service:{{ (index .Values "insurance-service").service.port }},investments:http://investments-service:{{ (index .Values "investments-service").service.port }},loans:http://loans-service:{{ (index .Values "loans-service").service.port }}"
           livenessProbe:
             httpGet:
               path: /
-              port: 3000
+              port: {{ .Values.dashboard.service.port }}
             initialDelaySeconds: 3
           readinessProbe:
             httpGet:
               path: /
-              port: 3000
+              port: {{ .Values.dashboard.service.port }}
             initialDelaySeconds: 3
           resources:
-            {{- toYaml .Values.dashboard.resources | nindent 12 }}
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
   strategy:
     canary:
       canaryService: dashboard-canary
@@ -341,27 +346,22 @@ spec:
   selector:
     app: dashboard
   ports:
-    - port: 3000
-      targetPort: 3000
+    - port: {{ .Values.dashboard.service.port }}
+      targetPort: {{ .Values.dashboard.service.port }}
 ```
 
 Add `helm-chart/templates/dashboard-canary.yaml` — the two Services and the `AnalysisTemplate` shown above. Then update the `dashboard:` block in `helm-chart/values.yaml`:
 
 ```yaml
 dashboard:
-  replicas: 2
+  replicas: 2   # was 1
   image:
     tag: ""
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 100m
-      memory: 128Mi
+  service:
+    port: 3000
 ```
 
-`image.tag` stays empty, same as it's been since Module 5's `git revert` — falling back to the global `1.0.0`. Converting to a `Rollout` doesn't need a new version any more than Module 4's Helm conversion did; only `replicas` (bumped to 2, so there's enough Pods for a meaningful 50/50 split) and `resources` (now overridable via values, instead of hardcoded in the template) actually change here.
+Only `replicas` actually changes here, from `1` to `2` — enough Pods for a meaningful 50/50 canary split. `image.tag` stays empty, same as it's been since Module 5's `git revert`, falling back to the global `1.0.0`. `resources` isn't in `values.yaml` at all — it stays hardcoded directly in the template, exactly as it was in the plain `Deployment`. Converting to a `Rollout` doesn't need a new version any more than Module 4's Helm conversion did, and it doesn't need `resources` to become overridable either — that's not something this module actually requires.
 
 Sanity-check it locally:
 
