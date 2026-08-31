@@ -186,7 +186,13 @@ argocd app get finovra
 
 ### Step 4 — Ship the real fix
 
-Find the bad commit's SHA (`git log --oneline`), then, while still paused:
+Find the bad commit's SHA:
+
+```bash
+git log --oneline
+```
+
+Look for the commit from Step 1 — `Bump dashboard to 1.0.1` — and copy its SHA. Then, while still paused:
 
 ```bash
 git revert <bad-commit-sha>
