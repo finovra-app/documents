@@ -388,7 +388,23 @@ Wait for `Status: ✔ Healthy`, `Step: 2/2`, `SetWeight: 100`. Confirm `argocd a
 
 ### Step 3 — Ship a good change, watch the canary pass
 
-Optional. If you'd rather see one full successful canary cycle before breaking anything, push any harmless change to `helm-chart/values.yaml` (leave `dashboard.image.tag: ""` as-is) and watch it sail through `Step: 2/2` on its own. Otherwise, move straight to Step 4.
+Optional. If you'd rather see one full successful canary cycle before breaking anything, bump `dashboard.image.tag` to `"1.0.2"` in `helm-chart/values.yaml` — the exact same dashboard code as `1.0.0`, just published under a different tag on Docker Hub, so this is guaranteed to pass while still triggering a real new Rollout revision (any change to the Pod template — not just a "real" one — is enough to start a canary):
+
+```yaml
+dashboard:
+  replicas: 2
+  image:
+    tag: "1.0.2"   # was ""
+```
+
+```bash
+git add helm-chart/values.yaml
+git commit -m "Bump dashboard to 1.0.2 (demo: successful canary)"
+git push origin main
+kubectl argo rollouts get rollout dashboard -n finovra --watch
+```
+
+Watch it sail through `Step: 2/2` on its own — no red tiles, no aborted analysis, `SetWeight: 100` within seconds of the analysis step starting. No need to revert afterward; `1.0.2` is functionally identical to `1.0.0`, so either is a fine base for Step 4. Otherwise, skip this step and move straight to Step 4.
 
 ### Step 4 — Inject the failure
 
