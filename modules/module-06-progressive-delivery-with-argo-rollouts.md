@@ -121,7 +121,7 @@ Argo Rollouts is a separate controller with its own CRDs. Install both the contr
 
 ```bash
 kubectl create namespace argo-rollouts
-kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml
+kubectl apply -n argo-rollouts -f https://github.com/argoproj/argo-rollouts/releases/latest/download/install.yaml --server-side --force-conflicts
 
 # macOS
 brew install argoproj/tap/kubectl-argo-rollouts
@@ -131,6 +131,8 @@ curl -LO https://github.com/argoproj/argo-rollouts/releases/latest/download/kube
 chmod +x kubectl-argo-rollouts-linux-amd64
 sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
 ```
+
+**Why `--server-side --force-conflicts` and not plain `apply`:** two of these CRDs (`rollouts.argoproj.io`, `analysisruns.argoproj.io`) carry very large embedded OpenAPI schemas. A regular `kubectl apply` tries to stash the whole object into the `kubectl.kubernetes.io/last-applied-configuration` annotation for its 3-way diff, and that blows past Kubernetes' 256KB annotation limit — you'll see `metadata.annotations: Too long`. Server-side apply tracks field ownership instead of that annotation, so it doesn't hit the limit; `--force-conflicts` just lets it take ownership of fields if you'd already partially applied this manifest with plain `apply` first.
 
 Verify:
 
