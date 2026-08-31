@@ -154,39 +154,35 @@ argocd app get finovra
 
 ### Step 3 — See the incident come back, then patch around it live
 
-Sync is still disabled from Step 2, and Git still has `1.0.1` at `HEAD`. Re-enable automated sync and watch what happens:
+Sync is still disabled from Step 2. Confirm it before doing anything else:
 
 ```bash
-argocd app set finovra --sync-policy automated --auto-prune --self-heal
+argocd app get finovra
+```
+
+Check the `Sync Policy` line — it should still read `<none>`. Now trigger a sync anyway, from the CLI or the **Sync** button in the UI:
+
+```bash
 argocd app sync finovra
 argocd app get finovra
 ```
 
-The dashboard goes broken again — `Health Status: Healthy`, visibly not working. No new commit was needed: Git already had `1.0.1` declared, and automated sync just did its job — redeploying whatever Git says, regardless of whether that's actually good.
+The dashboard goes broken again — `Health Status: Healthy`, visibly not working. No new commit was needed, and automated sync is still off. This is worth sitting with: **disabling automated sync only stops ArgoCD from triggering a sync on its own.** It doesn't change what Git says, and it doesn't stop *you* from syncing manually — an explicit sync, CLI or UI, still reconciles the cluster to whatever's at Git's `HEAD`, which is still `1.0.1`.
 
-Now run the before/after from Technique 2. First, the unprotected attempt:
-
-```bash
-kubectl set image deployment/dashboard dashboard=arsr319/finovra-dashboard:1.0.0 -n finovra
-sleep 5
-kubectl get deployment dashboard -n finovra -o jsonpath='{.spec.template.spec.containers[0].image}'
-```
-
-Still shows `...1.0.1` — `selfHeal` reverted your patch before you even got to see it stick. Now the protected version:
+Now patch the running Deployment straight back to the known-good image:
 
 ```bash
-argocd app set finovra --sync-policy none
 kubectl set image deployment/dashboard dashboard=arsr319/finovra-dashboard:1.0.0 -n finovra
 kubectl get deployment dashboard -n finovra -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-Confirm it now shows `...1.0.0` and stays there. Open the dashboard — it's genuinely working again. Then:
+It sticks immediately, no fight this time — sync is still paused from Step 2, so there's no `selfHeal` active to revert it. (Section 3 already showed you what happens when there *is*: the exact same command, with automated sync on, gets reverted within seconds.) Open the dashboard — it's genuinely working again. Then check the sync status, CLI or UI:
 
 ```bash
 argocd app get finovra
 ```
 
-`Sync Status: OutOfSync` — the cluster is fixed, but Git still says `1.0.1`. The incident isn't closed, it's patched.
+`Sync Status: OutOfSync` — same badge shows in the UI. The cluster is fixed, but Git still says `1.0.1`. The incident isn't closed, it's patched.
 
 ### Step 4 — Ship the real fix
 
@@ -195,10 +191,10 @@ Find the bad commit's SHA (`git log --oneline`), then, while still paused:
 ```bash
 git revert <bad-commit-sha>
 git push origin main
-kubectl get deployment dashboard -n finovra
+kubectl get deployment dashboard -n finovra -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-Confirm nothing has changed yet — still paused, still `0/0`. Then hand control back to ArgoCD:
+Confirm nothing has changed yet — still paused, still showing `...1.0.0` from your Step 3 patch, regardless of what Git now says. Then hand control back to ArgoCD:
 
 ```bash
 argocd app set finovra --sync-policy automated --auto-prune --self-heal
@@ -228,8 +224,8 @@ Everything converges in one reconciliation: replicas back to `1`, image back to 
 
 1. Why did `Health Status` stay `Healthy` throughout this entire module, even while the dashboard was visibly broken?
 2. Why does ArgoCD refuse to run `argocd app rollback` while automated sync is enabled?
-3. In Step 3, why did the dashboard go broken again the moment you re-enabled automated sync, without you pushing any new commit?
-4. In Step 3, the exact same `kubectl set image` command produced two different outcomes. What changed in between, and why?
+3. In Step 3, why did the dashboard go broken again the moment you ran a manual sync, even though automated sync was still disabled and no new commit was pushed?
+4. The same `kubectl set image` command gets reverted within seconds in Section 3, but sticks immediately in Step 3. What's different between those two moments?
 5. The Step 3 patch made the dashboard genuinely work again — full working service, not just downtime avoided. Why isn't that the same thing as actually closing the incident?
 
 ---
