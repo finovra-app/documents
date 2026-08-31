@@ -410,6 +410,8 @@ Watch it sail through `Step: 2/2` on its own — no red tiles, no aborted analys
 
 ### Step 4 — Inject the failure
 
+Worth being explicit about what does and doesn't change here: the `dashboard-healthz-check` `AnalysisTemplate` — same one Step 1 created, same one Step 3 just passed against — stays completely untouched. Only `dashboard.image.tag` changes. The check doesn't know anything about `1.0.2` or `1.0.3` specifically; it just does `GET /healthz` and expects `status: "ok"`. Step 3 passed because `1.0.2`'s `/healthz` genuinely returns that. This step fails because `1.0.3`'s doesn't — nothing about the check itself has to change to catch it.
+
 Bump `dashboard.image.tag` to `"1.0.3"` in `helm-chart/values.yaml`, commit, push:
 
 ```bash
