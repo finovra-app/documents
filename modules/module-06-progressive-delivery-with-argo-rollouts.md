@@ -41,11 +41,68 @@ Argo Rollouts supports two progressive delivery strategies. This module labs **c
 - If it fails, the rollout aborts
 - Two versions deliberately serve real traffic side-by-side, briefly
 
+```mermaid
+flowchart LR
+    subgraph Before["Before"]
+        A["v1 — 100% of Pods"]
+    end
+
+    subgraph Canary["Canary step — setWeight: 50"]
+        B1["v1 (stable) — 50%"]
+        B2["v2 (canary) — 50%"]
+        AN{{"Automated analysis\nchecks v2 only"}}
+        B2 -.-> AN
+    end
+
+    subgraph Pass["Analysis passes"]
+        C["v2 ramps to 100%\nv1 scaled down"]
+    end
+
+    subgraph Fail["Analysis fails"]
+        D["v2 scaled down to 0\nv1 stays at 100%"]
+    end
+
+    Before --> Canary
+    AN -- pass --> Pass
+    AN -- fail --> Fail
+
+    style B2 fill:#fc6,stroke:#333
+    style D fill:#f66,stroke:#333
+    style C fill:#6c6,stroke:#333
+```
+
+Notice both `v1` and `v2` Pods sit behind the *same* Service the whole time — real traffic is split between them for as long as the canary step runs, which is exactly what Section 4 shows happening for real with `dashboard`.
+
 **Blue-green:**
 - Two full, independent environments: "blue" (currently active) and "green" (the new release)
 - Green deploys completely and gets verified separately — often through a `previewService` that never receives real user traffic
 - Traffic then cuts over **all at once** — one moment everyone hits blue, the next everyone hits green
 - Blue keeps running afterward, so rollback just means flipping traffic back, not a redeploy
+
+```mermaid
+flowchart LR
+    subgraph Before["Before"]
+        A["Blue (active) — 100% real traffic\nv1"]
+    end
+
+    subgraph Verify["Verify"]
+        B1["Blue (active) — 100% real traffic\nv1"]
+        B2["Green (preview) — 0% real traffic\nv2, checked via previewService"]
+    end
+
+    subgraph Cutover["Cutover — instant"]
+        C1["Green (now active) — 100% real traffic\nv2"]
+        C2["Blue (idle, still running)\nv1 — rollback target"]
+    end
+
+    Before --> Verify --> Cutover
+
+    style B2 fill:#fc6,stroke:#333
+    style C1 fill:#6c6,stroke:#333
+    style C2 fill:#ccc,stroke:#333
+```
+
+Notice `v2` never receives real traffic until the instant cutover — unlike canary, there's no window where both versions are actually serving users at once. That's the whole tradeoff in one picture: canary risks a *partial* blast radius during verification; blue-green risks nothing during verification, but commits fully the moment it cuts over.
 
 | | Canary | Blue-Green |
 |---|---|---|
