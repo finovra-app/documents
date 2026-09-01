@@ -391,7 +391,13 @@ kubectl get pods -n finovra-prod
 
 Brand-new Pods this time — fresh names, `AGE` starting from zero. Unlike a plain `kubectl delete` would have, Step 5's cascade delete left nothing behind for `root.yaml` to adopt, so this sync is a genuine first deploy: `root.yaml` picked up the same two files and created `Application`s that had to build staging and prod up from an empty namespace, same as Step 4 did the first time. This is the last time you `kubectl apply` an `Application` by hand in this module — from here, everything in `apps/` is `root`'s responsibility.
 
-### Step 7 — Run a real promotion
+### Step 7 — Extra: bring up a fourth environment without touching `root.yaml`
+
+**Try it yourself first:** `finovra-root` is already watching every file under `apps/` — what's the smallest change needed to stand up a fourth environment, `qa`, without editing `root.yaml` at all?
+
+Create `helm-chart/values-qa.yaml` (any override — e.g. `dashboard: replicas: 1`) and `apps/finovra-qa.yaml` (same shape as `finovra-staging.yaml`, just `namespace: finovra-qa` and `valueFiles: [values-qa.yaml]`), commit and push both. No `root.yaml` edit, no manual `kubectl apply` — `finovra-qa` should show up in `argocd app list` and deploy on its own within moments, since `root.yaml`'s source is the whole `apps/` folder, not a fixed list of names.
+
+### Step 8 — Run a real promotion
 
 Open a PR (not a direct push to `main`) that changes exactly one line — `helm-chart/values-prod.yaml`'s `dashboard.image.tag`, from `"1.0.0"` to `"1.0.2"`:
 
@@ -418,7 +424,7 @@ argocd app get finovra-prod
 kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then tore both environments down completely and watched an App-of-Apps root redeploy them from scratch, from the exact same files, with no manual `kubectl apply` involved.
+**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then tore both environments down completely and watched an App-of-Apps root redeploy them from scratch, from the exact same files, with no manual `kubectl apply` involved. Adding `qa` on top proved the payoff: a fourth environment, live, with nothing more than a `git push`.
 
 ---
 

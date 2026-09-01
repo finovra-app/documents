@@ -102,12 +102,13 @@ Covered as three distinct, real-world techniques:
 - A deliberate step back from Module 6's canary Rollout to a plain Deployment, so promotion is the only new concept this module introduces
 - Promoting dev → staging → prod: PR-based promotion workflow, with a manual approval gate before prod
 - App-of-Apps pattern for managing multiple environments/apps from one root — built by hand first, then adopted by the root, so the problem it solves is visible before the fix is
-- **Lab:** Build a 2-environment (staging/prod) promotion flow using per-environment Helm values files and a PR-based promotion; apply staging/prod by hand, delete them, then watch an App-of-Apps root adopt the same running resources without redeploying anything
+- **Lab:** Build a 2-environment (staging/prod) promotion flow using per-environment Helm values files and a PR-based promotion; apply staging/prod by hand, cascade-delete both, then watch an App-of-Apps root redeploy them from scratch; add a fourth environment (`qa`) with nothing but a `git push`, to prove the root's payoff
 
 ### Module 8: Scaling to Many Apps — ApplicationSets (Essentials only)
-- The problem ApplicationSets solve (don't hand-write 50 Application YAMLs)
-- **Only** the two generators teams actually reach for: **List** and **Git directory** generators
-- **Lab:** Generate one Application per Finovra backend service from a single ApplicationSet using the Git generator
+- The problem ApplicationSets solve (don't hand-write one Application YAML per environment)
+- **Only** the generator teams reach for most: the **List generator**
+- Why prod is deliberately left out of the initial set (its manual-sync gate can't be expressed in a template shared with automated environments) — and what it costs to bring it in
+- **Lab:** Collapse dev/qa/staging's `Application` files into one `ApplicationSet`, leaving prod hand-managed; optionally fold prod in too and feel the trade-off firsthand
 
 ---
 
