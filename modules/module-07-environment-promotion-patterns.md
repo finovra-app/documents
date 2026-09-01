@@ -59,7 +59,29 @@ That second gate is what the syllabus calls "a manual approval gate before prod,
 
 You'll build `staging` and `prod` by hand first in this module's lab — `kubectl apply -f apps/finovra-staging.yaml`, same as every `Application` you've applied since Module 3. That's fine for a couple of environments. It gets tedious fast once you're managing several — and error-prone, since nothing stops someone from forgetting to apply one of them, or applying a stale copy.
 
-**App-of-Apps** solves this by making the list of `Application` objects itself something ArgoCD manages: one root `Application` whose "app" is a folder of other `Application` manifests.
+**App-of-Apps** solves this by making the list of `Application` objects itself something ArgoCD manages: one root `Application` whose "app" is a folder of other `Application` manifests — a two-layer hierarchy, root manages `Application`s, each of those manages actual Deployments/Services:
+
+```mermaid
+flowchart TB
+    Git["Git: apps/\nfinovra.yaml, finovra-staging.yaml, finovra-prod.yaml"]
+    Root["Application: finovra-root\nsource.path: apps — automated sync"]
+    A1["Application: finovra\n(dev)"]
+    A2["Application: finovra-staging"]
+    A3["Application: finovra-prod"]
+    D1["Deployments/Services\nns: finovra"]
+    D2["Deployments/Services\nns: finovra-staging"]
+    D3["Deployments/Services\nns: finovra-prod"]
+
+    Git -->|watched by| Root
+    Root -->|creates & syncs| A1
+    Root -->|creates & syncs| A2
+    Root -->|creates & syncs| A3
+    A1 -->|manages| D1
+    A2 -->|manages| D2
+    A3 -->|manages| D3
+```
+
+Everything below `Root` in this picture is exactly what you already know from every module so far — an `Application` watching a Git path, managing whatever's in the target namespace. The only new idea is the top layer: `finovra-root` treats `apps/` itself as the thing it's watching, so adding, removing, or fixing an environment's `Application` becomes a normal Git change instead of a `kubectl apply` you have to remember to run.
 
 ```yaml
 # apps/root.yaml
