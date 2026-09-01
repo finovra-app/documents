@@ -85,7 +85,7 @@ spec:
 
 This is the plain-YAML directory source type — nothing new there — except what it's managing is a folder of `Application` objects rather than a folder of Deployments/Services. Apply `root.yaml` once, and everything already sitting in `apps/` (`finovra.yaml`, `finovra-staging.yaml`, `finovra-prod.yaml`) gets picked up and kept in sync automatically — including files that were already there from being applied by hand earlier. Add a fourth environment later, and it's a fourth file in `apps/` plus a `git push` — no new `kubectl apply` command to remember.
 
-**Deleting an `Application` object does not delete what it deployed**, unless that `Application` carries the `resources-finalizer.argocd.argoproj.io` finalizer. None of Finovra's `Application`s have one. That matters for this module's lab: when you delete `finovra-staging`/`finovra-prod` by hand in Step 5, their Deployments/Services keep running, just briefly unmanaged — and when `root.yaml` recreates equivalent `Application` objects from the same files, it **adopts** those already-running resources instead of recreating them. Same namespace, same names, nothing to reconcile away.
+**Worth knowing before Step 5: a plain `kubectl delete -f` on an `Application` object does not delete what it deployed**, unless that `Application` carries the `resources-finalizer.argocd.argoproj.io` finalizer — none of Finovra's `Application`s have one, so a raw `kubectl delete` would leave the Deployments/Services running, just unmanaged. This module's lab doesn't rely on that, though: Step 5 deletes `finovra-staging`/`finovra-prod` with `argocd app delete --cascade` instead, which tears down the Pods along with the `Application`, so Step 6's App-of-Apps root has a genuinely empty namespace to deploy into — a real first sync, not a resume.
 
 `apps/` staying one level deep (only `Application` manifests, no subfolders) is what you want here — that's `source.directory.recurse`'s job to control, and its default is already `false`. **Don't write `directory: {recurse: false}` explicitly, even though it's tempting to be explicit about it:** `recurse` is a boolean that gets silently dropped whenever it's `false`, since `false` and "not set" serialize identically. Git would keep declaring it, the live `Application` object would never actually store it, and every reconciliation would see phantom drift and report `OutOfSync` forever, even though nothing is actually wrong — a real, easy-to-hit gotcha, not hypothetical. Leaving the field out entirely means there's nothing for that mismatch to happen to. If you ever need nested app-of-apps (a root managing other roots), that's when you'd set `recurse: true` for real — a non-default value serializes and persists just fine.
 
@@ -299,26 +299,26 @@ argocd app get finovra-prod
 
 That manual command **is** the approval gate from Section 2 — confirm `finovra-prod` settles to `Synced`/`Healthy` running `1.0.0`, one version behind staging's `1.0.2`.
 
-### Step 5 — Delete both Applications, watch the resources survive
+### Step 5 — Delete both Applications, and everything they deployed
 
-This is the pain App-of-Apps solves, made visible before you reach for the fix. Delete both `Application` objects:
+This is the pain App-of-Apps solves, made visible before you reach for the fix. A plain `kubectl delete -f` would leave the Pods running unmanaged (see Section 3) — instead, delete both `Application`s with `--cascade`, which tears down their Deployments/Services along with them:
 
 ```bash
-kubectl delete -f apps/finovra-staging.yaml
-kubectl delete -f apps/finovra-prod.yaml
+argocd app delete finovra-staging --cascade --yes
+argocd app delete finovra-prod --cascade --yes
 argocd app list
 ```
 
-Neither `finovra-staging` nor `finovra-prod` should show up anymore. Now check the actual workloads:
+Neither `finovra-staging` nor `finovra-prod` should show up anymore. Confirm the workloads are actually gone too, not just unmanaged:
 
 ```bash
 kubectl get pods -n finovra-staging
 kubectl get pods -n finovra-prod
 ```
 
-Still running — deleting an `Application` doesn't delete what it deployed unless it carries the `resources-finalizer.argocd.argoproj.io` finalizer, and neither of these files has one (check `metadata:` in each if you want to confirm). Right now, both namespaces are running Pods with nothing in ArgoCD managing them.
+Both should report `No resources found`. Right now, staging and prod are back to empty namespaces — nothing running, nothing in ArgoCD referencing either environment.
 
-### Step 6 — Introduce App-of-Apps, watch it adopt what's already running
+### Step 6 — Introduce App-of-Apps, watch it deploy both from scratch
 
 Create `apps/root.yaml` (the exact file shown in Section 3):
 
@@ -343,7 +343,7 @@ spec:
       selfHeal: true
 ```
 
-`apps/finovra-staging.yaml` and `apps/finovra-prod.yaml` are still sitting in the repo from Step 4 — you never removed the files, only the live `Application` objects. Commit and push just `root.yaml`, then apply it once:
+`apps/finovra-staging.yaml` and `apps/finovra-prod.yaml` are still sitting in the repo from Step 4 — you only deleted the live `Application` objects in Step 5, never the files. Commit and push just `root.yaml`, then apply it once:
 
 ```bash
 git add apps/root.yaml
@@ -360,14 +360,14 @@ Within moments, `finovra-staging` and `finovra-prod` should both exist again as 
 argocd app list
 ```
 
-Confirm both come back `Synced`/`Healthy` (staging) / `Synced`/`Healthy` after a sync (prod — you'll need `argocd app sync finovra-prod` once more, since prod is still manual-sync-only even under the root). Then confirm this was adoption, not a redeploy — same Pods, not new ones:
+Confirm `finovra-staging` comes back `Synced`/`Healthy` on its own; `finovra-prod` needs one more `argocd app sync finovra-prod` — it's still manual-sync-only even under the root. Then check the Pods:
 
 ```bash
 kubectl get pods -n finovra-staging
 kubectl get pods -n finovra-prod
 ```
 
-Compare Pod names/ages against what you saw in Step 5 — unchanged. `root.yaml` picked up the same two files, created `Application` objects with the same names targeting the same namespaces, and ArgoCD reconciled against what was already there instead of recreating it. This is the last time you `kubectl apply` an `Application` by hand in this module — from here, everything in `apps/` is `root`'s responsibility.
+Brand-new Pods this time — fresh names, `AGE` starting from zero. Unlike a plain `kubectl delete` would have, Step 5's cascade delete left nothing behind for `root.yaml` to adopt, so this sync is a genuine first deploy: `root.yaml` picked up the same two files and created `Application`s that had to build staging and prod up from an empty namespace, same as Step 4 did the first time. This is the last time you `kubectl apply` an `Application` by hand in this module — from here, everything in `apps/` is `root`'s responsibility.
 
 ### Step 7 — Run a real promotion
 
@@ -396,7 +396,7 @@ argocd app get finovra-prod
 kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then watched an App-of-Apps root adopt the exact same environments without redeploying anything.
+**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then tore both environments down completely and watched an App-of-Apps root redeploy them from scratch, from the exact same files, with no manual `kubectl apply` involved.
 
 ---
 
@@ -408,8 +408,9 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 | **PR review gate** | Branch protection requiring a reviewed, merged PR before a change lands on `main` — gates what's *allowed into Git* |
 | **Manual-sync gate** | An `Application` with no `automated:` sync policy — gates what's *allowed to actually deploy*, independent of the PR gate |
 | **App-of-Apps** | A root `Application` whose source is a folder of other `Application` manifests, so ArgoCD manages the app list itself instead of you applying each one by hand |
-| **Adoption** | When a new `Application` targets a namespace/resources an old (now-deleted) `Application` already created — ArgoCD reconciles against what's already running instead of recreating it, as long as neither had the cascading-delete finalizer |
-| **`resources-finalizer.argocd.argoproj.io`** | The finalizer that makes deleting an `Application` also delete everything it deployed. None of Finovra's `Application`s carry it, which is why Step 5's deletes don't take workloads down |
+| **Adoption** | When a new `Application` targets a namespace/resources an old (now-deleted) `Application` already created — ArgoCD reconciles against what's already running instead of recreating it. Doesn't apply to this module's lab, since Step 5's `--cascade` delete leaves nothing behind to adopt, but it's what a plain `kubectl delete -f` (no finalizer) would have set up instead |
+| **`resources-finalizer.argocd.argoproj.io`** | The finalizer that makes deleting an `Application` also delete everything it deployed. None of Finovra's `Application`s carry it declaratively — Step 5 gets the same effect via `argocd app delete --cascade` instead, which adds it transiently at delete time |
+| **`--cascade`** | Flag on `argocd app delete` that deletes the `Application`'s managed resources along with the `Application` itself, regardless of whether the YAML declares the finalizer |
 
 ---
 
@@ -417,8 +418,8 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 
 1. Why does this module revert `dashboard` from a `Rollout` back to a `Deployment` before building anything else — what would layering promotion on top of the canary have cost pedagogically?
 2. `finovra-staging` and `finovra-prod` are both `Synced` to the same Git commit at some point in Step 7. Why does only one of them actually have `1.0.2` running?
-3. In Step 5, why did the Pods in `finovra-staging`/`finovra-prod` keep running after their `Application` objects were deleted?
-4. In Step 6, how could you tell App-of-Apps *adopted* the existing Pods rather than recreating them?
+3. In Step 5, why does `argocd app delete --cascade` remove the Pods, when a plain `kubectl delete -f` on the same `Application` file wouldn't have?
+4. In Step 6, how could you tell App-of-Apps deployed staging and prod fresh, rather than finding something already there?
 
 ---
 
