@@ -22,7 +22,7 @@ This syllabus is deliberately **cut down**. Anything ArgoCD supports but that mo
 - Argo CD Agent (emerging, not yet mainstream)
 - Deep RBAC policy authoring, full SSO/OIDC setup — covered at "get it working" level only in the optional Running ArgoCD Safely module, not exhaustively
 - Custom health checks / Lua scripting (mentioned as "exists," not built)
-- **Sync Waves & Lifecycle Hooks as a standalone module** — genuinely useful for stateful/multi-tier apps, but most teams running plain microservices on ArgoCD never need explicit ordering. Lifecycle Hooks survive as a short add-on inside Module 7; Sync Waves are cut entirely rather than kept as a token example.
+- **Sync Waves & Lifecycle Hooks entirely** — genuinely useful for stateful/multi-tier apps, but most teams running plain microservices on ArgoCD never need explicit ordering, and neither survives as an add-on: both would compete with Module 7's actual lesson (environment promotion) instead of reinforcing it.
 - **Access, Secrets & Notifications as a required module** — real and commonly needed at some point, but not universally day-one for every learner. Kept as a complete optional module (see below) rather than core curriculum, so the required path stays focused on ArgoCD's core loop.
 
 ---
@@ -102,7 +102,6 @@ Covered as three distinct, real-world techniques:
 - A deliberate step back from Module 6's canary Rollout to a plain Deployment, so promotion is the only new concept this module introduces
 - Promoting dev → staging → prod: PR-based promotion workflow, with a manual approval gate before prod
 - App-of-Apps pattern for managing multiple environments/apps from one root — built by hand first, then adopted by the root, so the problem it solves is visible before the fix is
-- **Add-on: Lifecycle Hooks** — what `PreSync`/`PostSync` hooks are for (migrations, smoke tests) — concept plus one small example, not a full standalone treatment
 - **Lab:** Build a 2-environment (staging/prod) promotion flow using per-environment Helm values files and a PR-based promotion; apply staging/prod by hand, delete them, then watch an App-of-Apps root adopt the same running resources without redeploying anything
 
 ### Module 8: Scaling to Many Apps — ApplicationSets (Essentials only)
@@ -158,4 +157,4 @@ This is where we switch to **Online Boutique** — its 11 real, polyglot service
 - Argo CD Agent for large multi-cluster fleets
 - Full SSO/OIDC identity provider setup (beyond the concept-level treatment in the optional Running ArgoCD Safely module)
 - Deep RBAC policy authoring (beyond the AppProject basics in the optional Running ArgoCD Safely module)
-- Sync Waves entirely, and deeper Hooks patterns beyond Module 7's add-on (e.g. `SyncFail`/`PostDelete` hooks, wave-based multi-tier orchestration)
+- Sync Waves and Lifecycle Hooks entirely (e.g. `PreSync`/`PostSync`/`SyncFail`/`PostDelete` hooks, wave-based multi-tier orchestration) — not covered anywhere in the required path

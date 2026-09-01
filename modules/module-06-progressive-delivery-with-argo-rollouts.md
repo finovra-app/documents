@@ -489,7 +489,7 @@ A fresh commit is a fresh revision, so Argo Rollouts attempts the canary again f
 
 ## What's Next
 
-In **Module 7**, we build a real dev → staging → prod promotion flow using Kustomize overlays and a PR-based workflow — plus a short add-on on Sync Waves and Lifecycle Hooks, using Finovra's own dashboard-depends-on-backends shape as the example.
+In **Module 7**, we build a real dev → staging → prod promotion flow using per-environment Helm values files and a PR-based workflow — first applying staging/prod by hand, then watching an App-of-Apps root adopt them without redeploying anything.
 
 ---
 

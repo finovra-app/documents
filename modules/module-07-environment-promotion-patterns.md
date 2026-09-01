@@ -12,7 +12,6 @@ By the end of this module, you should be able to:
 - Set up a PR-based promotion flow, and explain the difference between the two separate gates a change passes through before it's live in prod
 - Explain what happens when you delete an `Application` object versus what happens to the resources it manages
 - Use the App-of-Apps pattern to manage multiple `Application` objects from one root, instead of `kubectl apply`-ing each by hand
-- Explain what a `PreSync` hook is for, and why it isn't useful on every kind of sync
 
 ---
 
@@ -89,43 +88,6 @@ This is the plain-YAML directory source type — nothing new there — except wh
 **Deleting an `Application` object does not delete what it deployed**, unless that `Application` carries the `resources-finalizer.argocd.argoproj.io` finalizer. None of Finovra's `Application`s have one. That matters for this module's lab: when you delete `finovra-staging`/`finovra-prod` by hand in Step 5, their Deployments/Services keep running, just briefly unmanaged — and when `root.yaml` recreates equivalent `Application` objects from the same files, it **adopts** those already-running resources instead of recreating them. Same namespace, same names, nothing to reconcile away.
 
 `apps/` staying one level deep (only `Application` manifests, no subfolders) is what you want here — that's `source.directory.recurse`'s job to control, and its default is already `false`. **Don't write `directory: {recurse: false}` explicitly, even though it's tempting to be explicit about it:** `recurse` is a boolean that gets silently dropped whenever it's `false`, since `false` and "not set" serialize identically. Git would keep declaring it, the live `Application` object would never actually store it, and every reconciliation would see phantom drift and report `OutOfSync` forever, even though nothing is actually wrong — a real, easy-to-hit gotcha, not hypothetical. Leaving the field out entirely means there's nothing for that mismatch to happen to. If you ever need nested app-of-apps (a root managing other roots), that's when you'd set `recurse: true` for real — a non-default value serializes and persists just fine.
-
----
-
-## 4. Add-on: Lifecycle Hooks
-
-A hook is a Kubernetes `Job` (usually) that ArgoCD runs at a specific point in the sync lifecycle, identified purely by an annotation — `PreSync`, `Sync`, `PostSync`, or `SyncFail`. It's not something most plain-microservices teams reach for often — but Finovra's dashboard genuinely does depend on its four backend services being up first, which makes it a fair example to build once.
-
-Here's a `PreSync` hook that checks every backend's `/healthz` before letting the rest of the sync proceed, as a new chart file:
-
-```yaml
-# helm-chart/templates/backend-healthcheck-hook.yaml
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: backend-healthcheck
-  annotations:
-    argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
-spec:
-  template:
-    spec:
-      restartPolicy: Never
-      containers:
-        - name: check
-          image: curlimages/curl:8.9.1
-          command:
-            - sh
-            - -c
-            - |
-              for svc in accounts-service insurance-service investments-service loans-service; do
-                curl -sf "http://$svc:8000/healthz" || exit 1
-              done
-```
-
-`hook-delete-policy: BeforeHookCreation` means ArgoCD deletes any previous run of this Job right before creating a new one — without it, the second sync would fail immediately with "Job already exists."
-
-**The catch, worth knowing before you reach for this pattern elsewhere:** a `PreSync` hook runs *before any of the sync's own resources are applied*. On a genuinely first-ever deploy to an empty namespace, this hook fails every time — the backend Services it's curling don't exist yet. That's exactly staging and prod's situation on their very first sync in this module's lab. Add this hook once you're past that first sync, not before it — it's a better fit once an environment's already running, validating existing backends stay healthy before rolling out a *new* dashboard release on top of them. Since this template is shared with `dev` too (same chart, every environment), it also runs there on every future sync — harmless for `dev` specifically, since its backends have been up continuously since Module 3, so the check just passes immediately each time. (The other common use — `PostSync` hooks for a smoke test *after* everything's up, or a one-off DB migration — doesn't have the first-sync problem, since by definition everything the hook needs already exists. This module builds only the `PreSync` example; `PostSync` follows the identical pattern with `argocd.argoproj.io/hook: PostSync` instead.)
 
 ---
 
@@ -434,7 +396,7 @@ argocd app get finovra-prod
 kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.spec.containers[0].image}'
 ```
 
-**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then watched an App-of-Apps root adopt the exact same environments without redeploying anything, and (if you added the `PreSync` hook from Section 4) watched it validate backends before every future dashboard rollout.
+**Checkpoint:** you built a real two-environment promotion flow — a PR review gate on Git, and a separate manual-sync gate on ArgoCD before anything reaches prod — first by hand, then watched an App-of-Apps root adopt the exact same environments without redeploying anything.
 
 ---
 
@@ -448,8 +410,6 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 | **App-of-Apps** | A root `Application` whose source is a folder of other `Application` manifests, so ArgoCD manages the app list itself instead of you applying each one by hand |
 | **Adoption** | When a new `Application` targets a namespace/resources an old (now-deleted) `Application` already created — ArgoCD reconciles against what's already running instead of recreating it, as long as neither had the cascading-delete finalizer |
 | **`resources-finalizer.argocd.argoproj.io`** | The finalizer that makes deleting an `Application` also delete everything it deployed. None of Finovra's `Application`s carry it, which is why Step 5's deletes don't take workloads down |
-| **Hook** | A Job tied to a sync phase (`PreSync`, `Sync`, `PostSync`, `SyncFail`) via the `argocd.argoproj.io/hook` annotation — for one-off tasks like migrations or smoke tests, not ongoing workloads |
-| **`hook-delete-policy`** | Controls whether/when ArgoCD deletes a completed hook Job — `BeforeHookCreation` clears the previous run so the next sync doesn't collide with it |
 
 ---
 
@@ -459,7 +419,6 @@ kubectl get deployment dashboard -n finovra-prod -o jsonpath='{.spec.template.sp
 2. `finovra-staging` and `finovra-prod` are both `Synced` to the same Git commit at some point in Step 7. Why does only one of them actually have `1.0.2` running?
 3. In Step 5, why did the Pods in `finovra-staging`/`finovra-prod` keep running after their `Application` objects were deleted?
 4. In Step 6, how could you tell App-of-Apps *adopted* the existing Pods rather than recreating them?
-5. Why would the `PreSync` backend-healthcheck hook fail on a brand-new environment's very first sync, and why isn't that a problem for a `PostSync` hook doing the same kind of check?
 
 ---
 
