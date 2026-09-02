@@ -116,7 +116,7 @@ This is exactly the `Secret` `argocd cluster add` would have written itself, had
 
 Every `Application` so far has used `destination.server: https://kubernetes.default.svc` — the literal, well-known API server address of whatever cluster ArgoCD itself is running in. ArgoCD also lets you reference a registered cluster by a **friendly name** instead: `destination.name: <name>`.
 
-ArgoCD reserves one name automatically, no registration needed: **`in-cluster`** always means "the cluster ArgoCD itself is running on" — the same target `https://kubernetes.default.svc` points at. That means you can switch *every* environment in the `ApplicationSet`'s template to use `destination.name` uniformly — `in-cluster` for dev/staging, `finovra-prod-cluster` for prod — instead of mixing a hardcoded URL with a friendly name. One field, one placeholder, works for all three:
+ArgoCD reserves one name automatically, no registration needed: **`in-cluster`** always means "the cluster ArgoCD itself is running on" — the same target `https://kubernetes.default.svc` points at. That means you can switch *every* environment in the `ApplicationSet`'s template to use `destination.name` uniformly — `in-cluster` for dev/qa/staging, `finovra-prod-cluster` for prod — instead of mixing a hardcoded URL with a friendly name. One field, one placeholder, works for all four:
 
 ```yaml
 destination:
@@ -228,7 +228,7 @@ Confirm you see two entries: the local `in-cluster` one (`https://kubernetes.def
 
 ### Step 5 — Point prod at the new cluster
 
-Edit `apps/finovra-environments.yaml` — add a `cluster` field to each element, and switch `destination` from `server` to `name`:
+Edit `apps/finovra-environments.yaml` — add a `cluster` field to each element, and switch `destination` from a bare `namespace` to `name` + `namespace`. `path: helm-chart` and the `helm.valueFiles` block in `template` don't change — every environment still shares them, per Module 8:
 
 ```yaml
 apiVersion: argoproj.io/v1alpha1
@@ -241,16 +241,20 @@ spec:
     - list:
         elements:
           - env: dev
-            path: helm-chart
             namespace: finovra
+            valuesFile: values-dev.yaml
+            cluster: in-cluster
+          - env: qa
+            namespace: finovra-qa
+            valuesFile: values-qa.yaml
             cluster: in-cluster
           - env: staging
-            path: kustomize/overlays/staging
             namespace: finovra-staging
+            valuesFile: values-staging.yaml
             cluster: in-cluster
           - env: prod
-            path: kustomize/overlays/prod
             namespace: finovra-prod
+            valuesFile: values-prod.yaml
             cluster: finovra-prod-cluster
   template:
     metadata:
@@ -260,7 +264,10 @@ spec:
       source:
         repoURL: https://github.com/finovra-app/gitops.git
         targetRevision: main
-        path: '{{path}}'
+        path: helm-chart
+        helm:
+          valueFiles:
+            - '{{valuesFile}}'
       destination:
         name: '{{cluster}}'
         namespace: '{{namespace}}'
@@ -278,7 +285,7 @@ Preview before pushing:
 argocd appset generate apps/finovra-environments.yaml
 ```
 
-Confirm `finovra-dev` and `finovra-staging` still show `destination.name: in-cluster`, and `finovra-prod` now shows `destination.name: finovra-prod-cluster`.
+Confirm `finovra-dev`, `finovra-qa`, and `finovra-staging` still show `destination.name: in-cluster`, and `finovra-prod` now shows `destination.name: finovra-prod-cluster`.
 
 ### Step 6 — Commit and push
 
